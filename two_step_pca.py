@@ -1,14 +1,17 @@
 import numpy as np 
+import pandas as pd 
+from sklearn.preprocessing import StandardScaler
+
 
 def shift_data(data, lag):
     """
     Creates a matrix based on input data and selected lag
-    Corresponds to ~X in the paper
+    Corresponds to ~X in the paper 
     Arguments:
-        data - numpy array with input data
-        lag - time lag parameter
-    Returns:
-        tildaX - ~X from the paper
+        data - numpy array, input matrix
+        lag - interger, time lag parameter 
+    Returns: 
+        tildaX - numpy array, ~X from the paper 
     """
     n_samples = data.shape[0]
     n_variables = data.shape[1]
@@ -17,10 +20,9 @@ def shift_data(data, lag):
     for t in range(lag, n_samples):
         for l in range(lag + 1):
             for v in range(n_variables):
-                tildaX[t - lag, v + l*n_variables] = data[t - l, v]
-                
-    
-    return tildaX
+                tildaX[t-lag, v + l*n_variables] = data[t-l, v]
+
+    return tildaX 
 
 def delta(data, D):
     """
@@ -61,7 +63,6 @@ def calcA(data, lag, D):
     A = np.dot(A1,A2)
 
     return A
-      
 
 def computeT2(T, E):
     """
@@ -95,30 +96,6 @@ def computeSPE(T):
         SPE[i] = np.sum(np.square(T[i]))
 
     return SPE
-
-
-def fit_transform(data, q, D):
-    """
-    Fit TS-PCA model with data 
-    Arguments:
-        data - numpy array with input data
-        q - lag, if not specified will use the one from constructor
-        D - time difference between two data samples used for estimating dynamic part,
-            if not specified the one from constructor is used
-    Returns:
-        U - innovation part (numpy array)
-        A - numpy array describing dynamic part of the model
-        tildaX - time shifted input numpy array
-    """
-    
-    A = calcA(data, q, D)
-    tildaX = shift_data(data, q)
-    #shift_data reduces the size of input data by lag, so it is necessary to align dimensions
-    sizeDiff = data.shape[0] - tildaX.shape[0]
-    data = data[sizeDiff:]
-    U = data - np.dot(tildaX, A)
-
-    return U, A, tildaX
 
 def pca(data):
     """
@@ -172,3 +149,59 @@ def dividePCs(T, E, var_explained, var_explained_required):
             break
 
     return T[:, :n_pca], E[:n_pca], T[:, n_pca:]
+
+
+class TS_PCA:
+    scaler = StandardScaler()
+    def fit(self, data, q, D):
+        """
+        Fit TS-PCA model with training data 
+        Arguments:
+            data - pandas dataframe (or numpy array), training data 
+            q - lag parameter 
+            D - time difference parameter 
+        """
+        #check if data is dataframe, if that is the case, convert it to numpy array
+        if isinstance(data, pd.DataFrame):
+            data = data.values
+        tildaX = shift_data(data, q)
+        #shift_data reduces the size of input data by lag, so it is necessary to align dimensions
+        sizeDiff = data.shape[0] - tildaX.shape[0]
+        data = data[sizeDiff:]
+        self.A = calcA(data, q, D)
+        self.q = q
+        self.D = D
+        U = data - np.dot(tildaX, self.A)
+        self.scaler.fit(U)
+        
+
+    def detect(self, data, var_explained):
+        """
+        Uses pretrained TS-PCA model to obtain Hotelling's T2 and SPE metrics for the test data
+        Arguments:
+            data - pandas dataframe or numpy array, testing data 
+            var_explained - float (0-1), determines how many principal components are used for T2 and SPE calculations
+                            rule of the thumb, keep it around 0.8-0.9
+        Returns:
+            metrics_df - pandas dataframe with T2 and SPE metrics 
+        """
+        #check if input data is a dataframe and convert in to numpy array if needed 
+        if isinstance(data, pd.DataFrame):
+            data = data.values 
+        
+        tildaX = shift_data(data , self.q)
+        sizeDiff = data.shape[0] - tildaX.shape[0] #it should be equal to "q", but this check is fast
+        #shift_data removes first q elements, so reallignment is required 
+        data = data[sizeDiff:]
+        #compute innovation part 
+        U = data - np.dot(tildaX, self.A)
+        #zero mean unit variance normalizing
+        U = self.scaler.transform(U)
+        T, P, E, var_explained_list = pca(U)
+        T_l, E_l, T_rest = dividePCs(T, E, var_explained_list, var_explained)
+        print(var_explained_list)
+        T2 = computeT2(T_l, E_l)
+        SPE = computeSPE(T_rest)
+        metrics_df = pd.DataFrame(data=np.concatenate((T2, SPE), axis=1), columns=['T2', 'SPE'])
+
+        return metrics_df
