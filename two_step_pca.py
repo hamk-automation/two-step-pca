@@ -13,15 +13,11 @@ def shift_data(data, lag):
     Returns: 
         tildaX - numpy array, ~X from the paper 
     """
-    n_samples = data.shape[0]
-    n_variables = data.shape[1]
 
-    tildaX = np.zeros((n_samples - lag, n_variables*lag + n_variables))
-    for t in range(lag, n_samples):
-        for l in range(lag + 1):
-            for v in range(n_variables):
-                tildaX[t-lag, v + l*n_variables] = data[t-l, v]
-
+    tildaX = data[lag:]
+      
+    for l in range(1, lag + 1):
+        tildaX = np.hstack((tildaX, data[lag - l: -l]))
     return tildaX 
 
 def delta(data, D):
@@ -36,9 +32,8 @@ def delta(data, D):
     n_samples, n_variables = data.shape
     dX = np.zeros((n_samples - D, n_variables))
 
-    for i in range(n_samples - D):
-        dX[i] = data[i + D] - data[i]
-    
+    data_shifted = data[D:]
+    dX = data_shifted - data[:-D]
     return dX
 
 def calcA(data, lag, D):
@@ -153,24 +148,50 @@ def dividePCs(T, E, var_explained, var_explained_required):
 
 class TS_PCA:
     scaler = StandardScaler()
-    def fit(self, data, q, D):
+
+    def fit(self, data, qMAX, DMAX, verbose=False):
         """
-        Fit TS-PCA model with training data 
+        Fit TS-PCA model with training data also calculates optimal q and D for the model
         Arguments:
             data - pandas dataframe (or numpy array), training data 
-            q - lag parameter 
-            D - time difference parameter 
+            qMAX - maximum lag parameter value (this value is used for search limit) 
+            DMAX - maximum time deference parameter value (this value is used for search limit)
+            verbose - boolean, set to true if you want to see how the method proceeds
         """
         #check if data is dataframe, if that is the case, convert it to numpy array
         if isinstance(data, pd.DataFrame):
             data = data.values
-        tildaX = shift_data(data, q)
-        #shift_data reduces the size of input data by lag, so it is necessary to align dimensions
+        
+        #this part is for q and D selection
+        min_var = []
+        for i in range(1, qMAX):
+            tildaX = shift_data(data, i)
+            sizeDiff = data.shape[0] - tildaX.shape[0]
+            temp_data = data[sizeDiff:]
+            A = calcA(temp_data, i, 100)
+            U = temp_data - np.dot(tildaX, A)
+            U_v = np.var(U)
+            min_var.append(U_v)
+            if verbose:
+                print("Iteration - q: {}, Variance: {}".format(i, U_v))
+        self.q = min_var.index(min(min_var)) + 1
+        #and now the same for D
+        min_var = []
+        tildaX = shift_data(data, self.q)
         sizeDiff = data.shape[0] - tildaX.shape[0]
         data = data[sizeDiff:]
-        self.A = calcA(data, q, D)
-        self.q = q
-        self.D = D
+        for i in range(1, DMAX):
+            A = calcA(data, self.q, i)
+            U = data - np.dot(tildaX, A)
+            U_v = np.var(U)
+            min_var.append(U_v)
+            if verbose:
+                print("Iteration - D: {}, Variance: {}".format(i, U_v))
+        self.D = min_var.index(min(min_var)) + 1
+        print("Optimal parameters are Q: {}, D: {}".format(self.q, self.D))
+
+      
+        self.A = calcA(data, self.q, self.D)
         U = data - np.dot(tildaX, self.A)
         self.scaler.fit(U)
         
@@ -199,7 +220,6 @@ class TS_PCA:
         U = self.scaler.transform(U)
         T, P, E, var_explained_list = pca(U)
         T_l, E_l, T_rest = dividePCs(T, E, var_explained_list, var_explained)
-        print(var_explained_list)
         T2 = computeT2(T_l, E_l)
         SPE = computeSPE(T_rest)
         metrics_df = pd.DataFrame(data=np.concatenate((T2, SPE), axis=1), columns=['T2', 'SPE'])

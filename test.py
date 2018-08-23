@@ -30,7 +30,7 @@ data_list = load_simulation_data('Faults')
 train_data = data_list['no_disturbance']
 
 ts_pca = tsp.TS_PCA()
-ts_pca.fit(train_data, 1, 200)
+ts_pca.fit(train_data, 8, 300, verbose=True)
 
 #testing
 test_data_dict = {}
